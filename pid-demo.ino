@@ -25,12 +25,17 @@ int kD = 0;       // holds the D parameter
 
 int motorCommand = 0; // holds the final command to motor
 
-int tick=0;  // holds the encoder's position (this is our error)
+int tick=0;  // holds the current error (instantanious)
+int currentError = 0;
+int previousError = 0;  // holds the previous timestep's error
+int deltaError = 0; // holds the derivative of the error
+float accumulatedError = 0; // holds accumulated error (over time)
 
-float accumulatedError = 0; // holds accumulated error
-
-int loopTimeMs = 20; // time in milliseconds. ex: 20 yields 50Hz
-
+// following variables used to control the loop time
+int loopTimeMs = 20; // desired loop time in milliseconds
+long nowish = 0;
+long timeDelta = 0;
+long timeMarker = 0;
 
 void encoderEvent() {
   if(digitalRead(ENCODER_1_PIN) == digitalRead(ENCODER_2_PIN)){
@@ -62,33 +67,43 @@ int fetchAnalog(int potPin){
 
 void updatePIDValues(){
   kP = int(fetchAnalog(POT_P_PIN) / 10);
-  kI = fetchAnalog(POT_I_PIN);
-  kD = fetchAnalog(POT_D_PIN);
+  kI = int(fetchAnalog(POT_I_PIN) / 10);
+  kD = int(fetchAnalog(POT_D_PIN) / 10);
 }
 
-int generatePCommand(int Kp, int error){
-  return Kp * error;
+void calculateAccumulatedError(){
+  if(currentError == 0){
+    accumulatedError = 0;
+    return;
+  }
+  accumulatedError += currentError;
+  accumulatedError = constrain(accumulatedError, -20, 20);
 }
 
-int generateICommand(int Ki, int error){
-  return Ki * accumulatedError;
+void calculateDeltaError(){
+  previousError = currentError;
+  currentError = tick;
+  deltaError =  currentError - previousError;
 }
 
-int generateDCommand(int Kd, int error){
-  return 0;
+int generatePCommand(){
+  return kP * currentError;
 }
 
-int generateMotorCommand(int Kp, int Ki, int Kd, int error){
-  return generatePCommand(Kp, error) +
-         generateICommand(Ki, error) +
-         generateDCommand(Kd, error);
+int generateICommand(){
+  return kI * accumulatedError;
 }
 
-void updateMotor(int motorCommand){
+int generateDCommand(){
+  return kD * deltaError;
+}
 
-  // safety first
-  motorCommand = constrain(motorCommand, -255, 255);
+void generateMotorCommand(){
+  int finalCommand = generatePCommand() + generateICommand() + generateDCommand();
+  motorCommand = constrain(finalCommand, -255, 255);
+}
 
+void updateMotor(){
   if(motorCommand >= 0){
     digitalWrite(MOTOR_DIRECTION_PIN, HIGH);
   }else{
@@ -103,27 +118,32 @@ void updateDisplay(){
   oled.setTextSize(1);
   oled.setTextColor(WHITE);
   oled.setCursor(0,0);
-  oled.print("P: ");
-  oled.print(kP);
-  oled.print(", I: ");
-  oled.print(kI);
-  oled.print(", D: ");
-  oled.println(kD);
-  oled.print("\nerror: ");
-  oled.println(tick);
-  oled.print("\naccError: ");
-  oled.println(accumulatedError);
-  oled.print("\ncommand: ");
-  oled.println(motorCommand);
+  oled.print("P: "); oled.print(kP); oled.print(", I: "); oled.print(kI); oled.print(", D: "); oled.println(kD);
+  oled.print("\nerror: "); oled.println(currentError);
+  oled.print("prev Error: "); oled.println(previousError);
+  oled.print("acc Error: "); oled.println(accumulatedError);
+  oled.print("delta Error: "); oled.println(deltaError);
+  oled.print("command: "); oled.println(motorCommand);
   oled.display();
 }
 
+// following lines ensure main loop is TIMESTEP ms long
+void wait_enough_time(){
+  while(true){
+    nowish = millis();
+    timeDelta = nowish - timeMarker;
+    if(timeDelta < loopTimeMs){return;}
+    timeMarker = nowish;
+  }
+}
+
 void loop(){
+  wait_enough_time();
   updatePIDValues();
-  accumulatedError += tick;
-  motorCommand = generateMotorCommand(kP, kI, kD, tick);
-  updateMotor(motorCommand);
+  calculateAccumulatedError();
+  calculateDeltaError();
+  generateMotorCommand();
+  updateMotor();
   updateDisplay();
-  delay(20); // stop the program for some time
  }
 
