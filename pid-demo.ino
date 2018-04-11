@@ -9,7 +9,7 @@
 #endif
 
 #define ENCODER_1_PIN 7         // interrupt-0
-#define ENCODER_2_PIN 14         // gpio
+#define ENCODER_2_PIN 14        // gpio
 #define MOTOR_DIRECTION_PIN 15  // gpio
 #define MOTOR_SPEED_PIN 9       // PWM
 
@@ -25,10 +25,10 @@ int kD = 0;       // holds the D parameter
 
 int motorCommand = 0; // holds the final command to motor
 
-int tick=0;  // holds the current error (instantanious)
-int currentError = 0;
-int previousError = 0;  // holds the previous timestep's error
-int deltaError = 0; // holds the derivative of the error
+int tick=0;                 // holds the tick offset from the encoder.
+int currentError = 0;       // error from offset. Comes from tampling tick
+int previousError = 0;      // holds the previous timestep's error
+int deltaError = 0;         // holds the derivative of the error
 float accumulatedError = 0; // holds accumulated error (over time)
 
 // following variables used to control the loop time
@@ -54,52 +54,46 @@ void setup(){
   attachInterrupt(digitalPinToInterrupt(ENCODER_1_PIN), encoderEvent, CHANGE);
 }
 
-// arduino analogRead range is 0-1023.
-// lets convert to 0-99.
-int normalize(int potVal){
-  return int(potVal * 0.09775);
-}
-
 int fetchAnalog(int potPin){
-  int potVal = analogRead(potPin);
-  return normalize(potVal);
+  int potVal = analogRead(potPin); // returns value in range [0,1023]
+  return int(potVal * .008797654); // normalize to value in range [0,9]
 }
 
+// dividing by 10 because we don't need values higher than 0-9.
 void updatePIDValues(){
-  kP = int(fetchAnalog(POT_P_PIN) / 10);
-  kI = int(fetchAnalog(POT_I_PIN) / 10);
-  kD = int(fetchAnalog(POT_D_PIN) / 10);
+  kP = fetchAnalog(POT_P_PIN);
+  kI = fetchAnalog(POT_I_PIN);
+  kD = fetchAnalog(POT_D_PIN);
 }
 
 void calculateAccumulatedError(){
+  // once we cross the 0 error mark, the past accumulated error
+  // is no longer helping us. Reset to 0.
   if(currentError == 0){
     accumulatedError = 0;
     return;
   }
+
   accumulatedError += currentError;
+
+  // helps with windup (overaccumulating the error)
   accumulatedError = constrain(accumulatedError, -20, 20);
 }
 
+// deltaError is used for the D component of the controller.
+// for that we need the derivative of the error.
+// since this is only called once per loop, we do not need to divide by time
 void calculateDeltaError(){
   previousError = currentError;
   currentError = tick;
   deltaError =  currentError - previousError;
 }
 
-int generatePCommand(){
-  return kP * currentError;
-}
-
-int generateICommand(){
-  return kI * accumulatedError;
-}
-
-int generateDCommand(){
-  return kD * deltaError;
-}
-
 void generateMotorCommand(){
-  int finalCommand = generatePCommand() + generateICommand() + generateDCommand();
+  // this is the crux of the PID controller: adding togethe the P,I,D components
+  int finalCommand = kP * currentError + kI * accumulatedError + kD * deltaError;
+
+  // ensure we stay within bounds of motor controller.
   motorCommand = constrain(finalCommand, -255, 255);
 }
 
@@ -127,7 +121,7 @@ void updateDisplay(){
   oled.display();
 }
 
-// following lines ensure main loop is TIMESTEP ms long
+// ensure main loop is <loopTimeMs> milliseconds long
 void wait_enough_time(){
   while(true){
     nowish = millis();
